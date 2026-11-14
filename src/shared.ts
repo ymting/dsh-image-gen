@@ -245,6 +245,13 @@ export interface OpenAICompatChannel {
   editFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson'
   editExtra?: Record<string, unknown>
   sizes?: Record<string, Record<string, string>>
+  /**
+   * [FORK] 该渠道是否优先让服务端回 URL 而不是内联 base64。
+   * 部分中转站内联 1.5–3MB base64，链路慢时会被超时截断并误报 invalid JSON；
+   * 但 URL 可能指向当前网络不可达的 CDN，因此取图失败会自动退回 b64。
+   * 未设置时沿用全局 openaiCompatPreferUrl。
+   */
+  preferUrl?: boolean
 }
 
 export interface OpenAICompatChannelSource {
@@ -262,6 +269,8 @@ export interface OpenAICompatChannelSource {
   openaiCompatSizes?: Record<string, Record<string, string>>
   openaiCompatChannels?: readonly OpenAICompatChannel[]
   openaiCompatActiveChannel?: string
+  /** [FORK] 全局「url 优先、b64 兜底」开关；渠道级 preferUrl 覆盖它。 */
+  openaiCompatPreferUrl?: boolean
 }
 
 export function openAICompatKeyRef(channelId: string): string {
@@ -310,6 +319,8 @@ export function resolveOpenAICompatChannels(source: OpenAICompatChannelSource): 
       editFormat: entry.editFormat ?? 'multipart',
       editExtra: entry.editExtra ?? {},
       sizes: entry.sizes ?? {},
+      // [FORK] 渠道级 url 优先开关按原样保留；undefined 表示沿用全局设置
+      ...(entry.preferUrl === undefined ? {} : { preferUrl: entry.preferUrl === true }),
     })
   }
   return channels

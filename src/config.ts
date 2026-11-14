@@ -149,6 +149,13 @@ export interface Config {
    * fixed three. Generation sends the exact configured string.
    */
   openaiCompatSizes?: Record<string, Record<string, string>>
+  /**
+   * [FORK] 中转站「url 优先、取图失败回退 b64」开关。
+   * 开启后生成请求带 `response_format: 'url'`，服务端只回一个短链接，彻底绕开
+   * 大 base64 响应体超时；若链接下载失败（CDN 不可达），自动重试一次不带该字段。
+   * 默认 false，行为与上游完全一致。
+   */
+  openaiCompatPreferUrl?: boolean
   seedreamBaseURL?: string
   seedreamModel?: string
   /**
@@ -250,6 +257,8 @@ export const Config = z.object({
     editFormat: z.union([z.const('multipart'), z.const('jsonImageUrlArray'), z.const('formReferenceImages'), z.const('siliconflowJson')]).default('multipart'),
     editExtra: z.dict(z.any()).default({}),
     sizes: z.dict(z.dict(z.string())).default({}),
+    // [FORK] 渠道级 url 优先开关；schemastery 没有 optional()，用 default(false) 表达「未设置」
+    preferUrl: z.boolean().default(false),
   })).default([])),
   openaiCompatActiveChannel: volatile(z.string().default('')),
   openaiCompatEditModel: volatile(z.string().default('')),
@@ -260,6 +269,8 @@ export const Config = z.object({
   openaiCompatEditFormat: volatile(z.union([z.const('multipart'), z.const('jsonImageUrlArray'), z.const('formReferenceImages'), z.const('siliconflowJson')]).default('multipart')),
   openaiCompatEditExtra: volatile(z.dict(z.any()).default({})),
   openaiCompatSizes: volatile(z.dict(z.dict(z.string())).default({})),
+  // [FORK] 全局 url 优先开关；默认 false 与上游一致
+  openaiCompatPreferUrl: volatile(z.boolean().default(false)),
   seedreamBaseURL: volatile(z.string().default(DEFAULT_SEEDREAM_BASE_URL)),
   seedreamModel: volatile(z.string().default(DEFAULT_SEEDREAM_MODEL)),
   seedreamOutputFormat: volatile(z.union(ARK_OUTPUT_FORMATS).default('jpeg')),
@@ -372,6 +383,8 @@ export function withOpenAICompatChannel(config: Config, channelId?: string): Con
     openaiCompatEditFormat: channel.editFormat ?? 'multipart',
     openaiCompatEditExtra: channel.editExtra ?? {},
     openaiCompatSizes: channel.sizes ?? {},
+    // [FORK] 渠道级 url 优先开关，缺省沿用全局设置（不覆盖 openaiCompatPreferUrl）
+    ...(channel.preferUrl === undefined ? {} : { openaiCompatPreferUrl: channel.preferUrl === true }),
     openaiCompatActiveChannel: channel.id,
   }
 }

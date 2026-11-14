@@ -1,7 +1,9 @@
 /** OpenAI Images API and compatible response adapter. */
+import { brotliDecompressSync, gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib'
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { downloadPublicImage } from './public-image-download.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
+import { debugTiming } from './debug-timing.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
 import { arkOutputBody, type ArkOutputOptions } from './shared.js'
@@ -50,7 +52,8 @@ export interface CompatibleReferenceImage {
   mediaType: ImageMediaType
 }
 
-export async function generateOpenAICompatibleImage(input: {
+/** [FORK] 生成请求的入参；抽成接口让 url / b64 两条路径共用同一份类型。 */
+export interface OpenAICompatibleGenerateInput {
   provider: 'openai' | 'openai-compat' | 'seedream' | 'xai' | 'zhipu'
   apiKey: string
   baseURL: string
@@ -72,10 +75,52 @@ export async function generateOpenAICompatibleImage(input: {
   signal: AbortSignal
   /** Ark-only output controls; ignored by every other provider. */
   arkOptions?: ArkOutputOptions
-}): Promise<GeneratedCompatibleImage> {
+  /**
+   * [FORK] 让服务端只回一个图片 URL（`response_format: 'url'`）。
+   *
+   * 部分中转站内联 1.5–3MB base64，链路慢时会被超时截断并误报 invalid JSON；
+   * 只回短链接可以让响应体缩到几百字节，彻底绕开出图链路的传输瓶颈。
+   * 但链接可能指向当前网络不可达的 CDN，所以下载失败会自动退回不带该字段的
+   * 第二次请求（服务端改为内联 base64）。
+   *
+   * `false`/缺省时与上游行为完全一致。
+   */
+  preferUrl?: boolean
+}
+
+export async function generateOpenAICompatibleImage(input: OpenAICompatibleGenerateInput): Promise<GeneratedCompatibleImage> {
+  if (input.preferUrl !== true) return generateOpenAICompatibleImageOnce(input, undefined)
+  try {
+    return await generateOpenAICompatibleImageOnce(input, 'url')
+  } catch (error) {
+    // 只有取图/下载与解析阶段失败才值得回退；请求本身被拒（4xx/5xx）回退也没用。
+    const message = error instanceof Error ? error.message : String(error)
+    if (!/download|no image|invalid JSON|no image data/i.test(message)) throw error
+    debugTiming('gen.fallback', 0, `provider=${input.provider} reason=${message.slice(0, 120)}`)
+    return generateOpenAICompatibleImageOnce(input, undefined)
+  }
+}
+
+/**
+ * [FORK] 单次生成请求，`responseFormat` 决定要不要在 body 上注入
+ * `response_format`。与上游原实现等价，只是把 body 构造抽出来，让
+ * url / b64 两种模式复用同一份代码。
+ */
+async function generateOpenAICompatibleImageOnce(
+  input: OpenAICompatibleGenerateInput,
+  responseFormat: 'url' | undefined,
+): Promise<GeneratedCompatibleImage> {
+  const started = performance.now()
+  debugTiming('gen.start', 0, `provider=${input.provider} model=${input.model} size=${input.size ?? '(none)'} response_format=${responseFormat ?? '(none)'} baseURL=${input.baseURL}`)
   const response = await guardedFetch(`${input.provider} image request`, input.signal, () => fetch(imageEndpoint(input.baseURL, 'generations'), {
     method: 'POST', redirect: 'error', signal: input.signal,
-    headers: { authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' },
+    headers: {
+      authorization: `Bearer ${input.apiKey}`,
+      'content-type': 'application/json',
+      // 只声明 gzip/deflate：一部分中转站会对响应体用 zstd，而运行时未必自动
+      // 解码；主动要 gzip 可以避开这条解码路径（仍保留 readBoundedBytes 兜底）。
+      'accept-encoding': 'gzip, deflate',
+    },
     body: JSON.stringify({
       model: input.model,
       prompt: input.prompt,
@@ -85,10 +130,14 @@ export async function generateOpenAICompatibleImage(input: {
       // outright (it needs exactly one input image), so it is the edit path's
       // option alone.
       ...(input.provider === 'seedream' ? { response_format: 'url', ...arkOutputBody(input.arkOptions, { background: false }) } : {}),
+      // 仅在调用方要求时注入，且绝不覆盖 extraBody 里渠道自己的显式设置
+      ...(responseFormat !== undefined && input.extraBody?.response_format === undefined ? { response_format: responseFormat } : {}),
       ...(input.extraBody ?? {}),
     }),
   }), input.apiKey)
-  return parseImageResponse(response, input.provider, { ...input, acceptSvg: input.extraBody?.output_format === 'svg' })
+  const parsed = await parseImageResponse(response, input.provider, { ...input, acceptSvg: input.extraBody?.output_format === 'svg' })
+  debugTiming('gen.total', performance.now() - started, `provider=${input.provider} bytes=${parsed.data.byteLength}`)
+  return parsed
 }
 
 /** How the edits endpoint expects its request body (#41). */
@@ -349,7 +398,27 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
       : undefined
 }
 
+/**
+ * [FORK] 取图阶段单独计时：服务端出图与 CDN 传输是两个独立环节，
+ * 只记总耗时分不清是「出图慢」还是「下载慢」，排查时容易误判。
+ */
 async function downloadImage(
+  url: string | undefined,
+  provider: string,
+  input: ImageResponseOptions,
+): Promise<GeneratedCompatibleImage> {
+  const started = performance.now()
+  try {
+    const result = await downloadImageInner(url, provider, input)
+    debugTiming('download.done', performance.now() - started, `provider=${provider} bytes=${result.data.byteLength} url=${String(url).slice(0, 80)}`)
+    return result
+  } catch (error) {
+    debugTiming('download.fail', performance.now() - started, `provider=${provider} err=${String((error as { message?: unknown })?.message ?? error).slice(0, 160)} url=${String(url).slice(0, 80)}`)
+    throw error
+  }
+}
+
+async function downloadImageInner(
   url: string | undefined,
   provider: string,
   input: ImageResponseOptions,
@@ -470,11 +539,40 @@ function imageMediaType(value: string | null | undefined): ImageMediaType | unde
 
 async function readBoundedText(response: Response, maxBytes: number): Promise<string> { return new TextDecoder().decode(await readBoundedBytes(response, maxBytes)) }
 
+/**
+ * [FORK] 中转站兼容：少数站点用 zstd/gzip/br/deflate 压缩响应体，而运行时
+ * 未必按 `content-encoding` 自动解码，解出来就是乱码，JSON.parse 随即报
+ * 「invalid JSON」——报错点和真实原因完全对不上。
+ *
+ * 判定顺序：先看 zstd 魔数（`28 b5 2f fd`，有些站点压缩但漏写 header），
+ * 再看声明的 content-encoding。解压失败说明声明与实际不符（例如运行时已经
+ * 自动解过一遍），原样返回，让上层的 JSON 解析报出真正的原因，而不是在这里
+ * 吞掉或抛错。
+ *
+ * 导出供测试直接验证各分支；运行时只经 readBoundedBytes 调用。
+ */
+export function decodeCompressedBody(bytes: Uint8Array, encoding: string | null): Uint8Array {
+  const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const magic = buffer.subarray(0, 4).toString('hex')
+  try {
+    if (magic === '28b52ffd') return new Uint8Array(zstdDecompressSync(buffer))
+    const declared = String(encoding ?? '').toLowerCase()
+    if (declared.includes('zstd')) return new Uint8Array(zstdDecompressSync(buffer))
+    if (declared.includes('br')) return new Uint8Array(brotliDecompressSync(buffer))
+    if (declared.includes('gzip')) return new Uint8Array(gunzipSync(buffer))
+    if (declared.includes('deflate')) return new Uint8Array(inflateSync(buffer))
+  } catch {
+    // 声明与实际不符时按原样返回，交给 JSON 解析暴露真实原因
+  }
+  return bytes
+}
+
 async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
   if (response.body === null) return new Uint8Array()
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0
   try { for (;;) { const next = await readResponseBody(response, () => reader.read()); if (next.done) break; bytes += next.value.byteLength; if (bytes > maxBytes) throw new Error(`Image response exceeded the ${String(maxBytes)} byte limit`); chunks.push(next.value) } } catch (error) { await reader.cancel().catch(() => undefined); throw error } finally { reader.releaseLock() }
   const joined = new Uint8Array(bytes); let offset = 0
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength }
-  return joined
+  // [FORK] 按需解压压缩响应体
+  return decodeCompressedBody(joined, response.headers.get('content-encoding'))
 }

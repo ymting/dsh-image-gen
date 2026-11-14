@@ -1,0 +1,166 @@
+# 本 fork 与上游的差异
+
+基线：`dsh-image-gen@0.11.2`（上游 `shanliuling/dsh-image-gen`）
+本 fork：`ymting/dsh-image-gen`
+
+本 fork 的定位是「装完即用」：不改配置、不额外装东西，`npm/pnpm add` 完就能出图。
+为了让这一点成立，做了两类改动——**能力补全** 和 **分发方式**。
+
+---
+
+## 一、能力补全：中转站兼容三件套
+
+上游对 OpenAI 兼容中转站（relay）的适配偏保守，实际会遇到三个问题。三项都用
+配置开关控制，**默认关闭，关闭时行为与上游逐字一致**。
+
+### 1. 压缩响应体解码
+
+| | |
+|---|---|
+| 开关 | 无（始终生效，只在上游会失败时救场） |
+| 源码 | `src/openai-compatible.ts` → `decodeCompressedBody()` |
+
+部分中转站用 zstd / gzip / brotli / deflate 压缩响应体，而运行时未必按
+`content-encoding` 自动解码。结果是一段乱码喂给 `JSON.parse`，报出
+`returned invalid JSON`——报错点和真实原因完全对不上，很容易误判成提示词或
+站点问题。
+
+判定顺序：先看 zstd 魔数 `28 b5 2f fd`（有些站点压缩但漏写 header），再看
+声明的 content-encoding。解压失败说明声明与实际不符，原样返回交给上层解析，
+绝不吞掉真实原因。
+
+### 2. URL 优先 + b64 自动回退
+
+| | |
+|---|---|
+| 全局开关 | `openaiCompatPreferUrl`（默认 `false`） |
+| 渠道开关 | `openaiCompatChannels[].preferUrl`（默认 `false`，未设置时沿用全局） |
+| 源码 | `src/openai-compatible.ts` → `generateOpenAICompatibleImage()` |
+
+中转站内联 1.5–3MB base64，链路慢时会被超时截断，同样表现为 `invalid JSON`。
+开启后请求带 `response_format: 'url'`，服务端只回一个短链接（响应几百字节），
+彻底绕开传输瓶颈。
+
+但链接可能指向当前网络不可达的 CDN，所以**取图失败会自动回退**：重新请求一次
+不带 `response_format` 的生成请求，让服务端改为内联 base64。
+
+回退只在取图/解析类失败时触发（`download` / `no image` / `invalid JSON` /
+`no image data`）；请求本身被 4xx/5xx 拒绝时直接抛出，不做无意义重试。
+
+- 显式写在 `extraBody.response_format` 里的值永远不会被覆盖；
+- `accept-encoding` 只声明 `gzip, deflate`，主动避开运行时不解码 zstd 的路径。
+
+### 3. `aspect_ratio` 方向修复
+
+| | |
+|---|---|
+| 源码 | `src/studio.ts` → `openAIRequestSize()`、`src/index.ts` 工具路径 |
+| 状态 | 已单独提交为 `fix/openai-compat-aspect-ratio-orientation`（与上游同风格） |
+
+两处缺口：
+
+1. 对话工具在 `openai-compat` 下完全不读 `aspect_ratio`，size 链是
+   `args.size ?? active.imageSize`，参数被静默丢弃，一律按 `1024x1024` 出方图；
+2. `openAIRequestSize` 对表里没有的比例一律退回 `1024x1024`。内置
+   `LEGACY_OPENAI_TABLE` 只有 1:1 / 3:2 / 2:3，而工具 schema 和比例选择器都
+   宣称支持十种。
+
+修法：工具路径改用与工作台相同的 `openAIRequestSize`（同一份渠道配置），
+fallback 改为比较比例两边——竖构图给 `1024x1536`，横构图给 `1536x1024`，
+只有 1:1 或无法解析时才给方形。渠道自己配了精确尺寸的仍然优先。
+
+### 4. 分阶段计时日志（诊断用）
+
+| | |
+|---|---|
+| 开关 | 环境变量 `DSH_IMAGE_GEN_TIMING`（默认关闭） |
+| 源码 | `src/debug-timing.ts` |
+
+出图慢时分不清是「服务端出图慢」还是「CDN 下载慢」还是「落盘慢」。开启后按
+stage 追加一行：`gen.start` / `gen.total` / `download.done` / `download.fail` /
+`tool.result` / `gen.fallback`。
+
+```bash
+# 写到默认位置 ~/.dsh/image-gen-timing.log
+DSH_IMAGE_GEN_TIMING=1
+
+# 或写到指定文件
+DSH_IMAGE_GEN_TIMING=/tmp/image-gen.log
+```
+
+默认关闭，不影响正常使用的性能与磁盘。任何写入异常都被吞掉——诊断代码绝不
+影响出图主流程。
+
+---
+
+## 二、分发方式：「装完即用」
+
+上游的 `.gitignore` 直接忽略整个 `lib/`，`prepare` 每次都跑完整构建。作为
+**git 依赖或压缩包**安装时这条路会断：
+
+- `pnpm` 默认拦下依赖的 build script → 构建不跑 → `lib/` 不存在 → 插件加载失败；
+- 现场构建还要求 devDependencies 齐全，而装插件不该有这种前置。
+
+本 fork 的处理：
+
+| 改动 | 位置 | 原因 |
+|---|---|---|
+| `lib/index.js`、`lib/client.js`、`lib/types/**/*.d.ts` 纳入版本控制 | `.gitignore` | 安装即用，不需要构建权限 |
+| 忽略 `lib/**/*.map`、`lib/types/**/*.js`、`lib/types/**/*.json` | `.gitignore` | sourcemap 与 tsc 中间产物纯属冗余，素材 JSON 已编译内联 |
+| `prepare` 改为守卫脚本 | `scripts/prepare-lib.mjs` | 产物齐全 → 直接跳过；缺失才回退构建，且明确报错而非留下空壳 |
+| `files` 保持原样 | `package.json` | 已包含 `lib/index.js` / `lib/client.js` / `lib/types/**/*.d.ts` |
+
+`prepare-lib.mjs` 会用 `where`/`which` 探测 pnpm 是否存在再回退 npm——Windows 下
+shell 启动不存在的命令返回退出码 1 而非 spawn 错误，只用 `result.error` 判断会
+误判成「构建失败」。
+
+### 安装方式
+
+```bash
+# 方式 A：git 依赖（固定 commit，可复现）
+pnpm add "dsh-image-gen@github:ymting/dsh-image-gen#<commit>"
+
+# 方式 B：本地 link（开发时改源码即时生效）
+pnpm add "dsh-image-gen@link:C:/my_projects/AI图片/github/dsh-image-gen"
+
+# 方式 C：registry（发布后）
+pnpm add dsh-image-gen@<version>
+```
+
+三条路都不需要现场构建，因为 `lib/` 已经在仓库里。
+
+---
+
+## 三、验证
+
+```bash
+pnpm run typecheck                    # 通过
+pnpm run build                        # 通过
+npx vitest run tests/fork-relay-compat.spec.ts   # 14/14 通过
+```
+
+`tests/fork-relay-compat.spec.ts` 覆盖：四种压缩格式、zstd 魔数识别、声明与实际
+不符时原样返回、preferUrl 开关、b64 回退、extraBody 不可被覆盖、4xx 不回退、
+计时日志三种开关状态。全部 `vi.stubGlobal` 伪造 fetch，不触网。
+
+### 已知的非本 fork 问题
+
+`tests/studio.spec.ts > triggers upstream abort signal when browser fetch is
+aborted after body upload` 是时序 flaky（等待 50ms 后在断言 `serverAbortFired`）。
+在**未打任何改动**的原始源码上连跑三次，同样会 1 失败 2 通过。
+
+---
+
+## 四、上游跟进
+
+上游出新版时的流程：
+
+```bash
+git fetch upstream
+git rebase upstream/main          # 本 fork 的 commit 只有几个，冲突面很小
+pnpm run build                    # 重新生成 lib/ 并提交
+git push
+```
+
+三项能力都做成了配置开关且默认关闭，因此即使上游合入其中某一项，也不会产生
+行为冲突——最坏情况是配置项重复，删掉本 fork 的对应实现即可。

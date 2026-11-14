@@ -1,6 +1,20 @@
 node_modules/
-lib/
 *.tgz
 .DS_Store
 *.log
 .smoke-home/
+
+# ---------------------------------------------------------------
+# 构建产物策略（本 fork 与上游不同，务必保留）：
+# 上游 .gitignore 直接忽略整个 lib/，只靠 prepare 现场构建；但作为 git 依赖或
+# 压缩包安装时，pnpm 默认拦下依赖的 build script，构建不跑 → lib/ 缺失 → 插件
+# 加载失败。所以这里改为「提交运行必需的入口，忽略体积大且可再生成的部分」：
+#   lib/index.js  ~2.4MB  宿主入口，必需
+#   lib/client.js ~5MB    浏览器入口，必需
+#   lib/types/**/*.d.ts   类型声明，供 IDE/类型检查使用
+# 忽略的是 tsc 产生的中间 JS（已打进上面两个入口）、sourcemap、以及用于构建
+# 的内置素材 JSON（编译时已内联进 index.js）。
+# ---------------------------------------------------------------
+lib/**/*.map
+lib/types/**/*.js
+lib/types/**/*.json

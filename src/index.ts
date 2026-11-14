@@ -29,6 +29,7 @@ import { keepGifOriginal, saveImportedOriginal } from './vault-registry.js'
 import { servePreview, serveThumb } from './thumb-route.js'
 import { durableAttachmentsRoot, pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
+import { debugTiming } from './debug-timing.js'
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
 import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionToolParameters, SubscriptionManager } from './subscription.js'
@@ -567,6 +568,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     const extraBody = channelExtras !== undefined ? { ...channelExtras, ...outputFields } : Object.keys(outputFields).length === 0 ? undefined : outputFields
     const generated = await runCloud(signal => generateOpenAICompatibleImage({
       strictImageDownloads: current().strictImageDownloads === true,
+      // [FORK] 中转站可选 url 优先（取图失败自动回退 b64）
+      preferUrl: current().openaiCompatPreferUrl === true,
       provider: active.provider,
       apiKey: credential,
       baseURL: active.baseURL,
@@ -579,6 +582,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       ...(extraBody === undefined ? {} : { extraBody }),
       ...(arkOptions === undefined ? {} : { arkOptions }),
     }), gifRequested)
+    // [FORK] 记录 tool 层拿到结果的时刻：和 download.done 对比即可判断时间花在
+    // 出图、传输还是落盘，排查「明明出图了却很久才看到」这类问题。
+    debugTiming('tool.result', 0, `provider=${active.provider} model=${active.model} size=${size ?? '(none)'} bytes=${generated.data.byteLength}`)
     // Report what the provider actually delivered: a relay that ignores
     // output_format returns a bitmap, and the card must not claim 'svg'.
     const deliveredSvg = generated.mediaType === 'image/svg+xml'
