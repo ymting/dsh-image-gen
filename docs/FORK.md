@@ -107,12 +107,16 @@ DSH_IMAGE_GEN_TIMING=/tmp/image-gen.log
 |---|---|---|
 | `lib/index.js`、`lib/client.js`、`lib/types/**/*.d.ts` 纳入版本控制 | `.gitignore` | 安装即用，不需要构建权限 |
 | 忽略 `lib/**/*.map`、`lib/types/**/*.js`、`lib/types/**/*.json` | `.gitignore` | sourcemap 与 tsc 中间产物纯属冗余，素材 JSON 已编译内联 |
-| `prepare` 改为守卫脚本 | `scripts/prepare-lib.mjs` | 产物齐全 → 直接跳过；缺失才回退构建，且明确报错而非留下空壳 |
+| **彻底删除** `prepare`，产物守卫挂到 `prepack` | `package.json` | pnpm 只要看到依赖声明了安装期脚本（prepare/preinstall/install/postinstall），就要求 `allowBuilds` 白名单，否则 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` 中断安装。即使守卫脚本本身「什么都不做」也会被判定为需要执行——唯一可靠的做法是根本没有脚本 |
+| 新增产物新鲜度守卫 `scripts/check-lib-fresh.mjs` | `package.json` → `prepack` | 产物缺失、或任一源文件比入口产物新（带 2 秒容差）就报错。只在 pack/publish 时触发，不影响安装 |
 | `files` 保持原样 | `package.json` | 已包含 `lib/index.js` / `lib/client.js` / `lib/types/**/*.d.ts` |
 
-`prepare-lib.mjs` 会用 `where`/`which` 探测 pnpm 是否存在再回退 npm——Windows 下
-shell 启动不存在的命令返回退出码 1 而非 spawn 错误，只用 `result.error` 判断会
-误判成「构建失败」。
+产物与源码脱节的代价是「装完即用」的隐性风险，所以用 `prepack` 挡在发布侧，
+而不是用 `prepare` 挡在安装侧。手动校验：
+
+```bash
+node scripts/check-lib-fresh.mjs
+```
 
 ### 安装方式
 
@@ -134,9 +138,11 @@ pnpm add dsh-image-gen@<version>
 ## 三、验证
 
 ```bash
-pnpm run typecheck                    # 通过
-pnpm run build                        # 通过
-npx vitest run tests/fork-relay-compat.spec.ts   # 14/14 通过
+pnpm run typecheck                              # 通过
+pnpm run build                                  # 通过
+node scripts/check-lib-fresh.mjs                # 产物齐全且不早于源码
+npx vitest run tests/fork-relay-compat.spec.ts \
+              tests/openai-compat-ratio.spec.ts # 20/20 通过
 ```
 
 `tests/fork-relay-compat.spec.ts` 覆盖：四种压缩格式、zstd 魔数识别、声明与实际
