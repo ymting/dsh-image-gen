@@ -36,7 +36,7 @@ import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionTool
 import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, cloudTimeoutFor, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspiration.js'
-import { channelSelectsGif, generateFromStudio, describeStudio, openAIRequestSize } from './studio.js'
+import { channelSelectsGif, chatToolSize, generateFromStudio, describeStudio, openAIRequestSize } from './studio.js'
 import { serveStudio } from './studio-route.js'
 import { serveTestConnection } from './test-route.js'
 import { describeSettingsHealth, serveSettingsHealth } from './settings-health.js'
@@ -188,6 +188,13 @@ function configForToolCall(config: Config, provider: ImageProvider | undefined, 
   if (channel !== undefined && selected !== 'openai-compat') throw new Error('The channel argument is only supported with provider=openai-compat.')
   return selected === 'openai-compat' ? withOpenAICompatChannel(config, channel) : config
 }
+
+/**
+ * [FORK] Decide the pixel size a chat-tool image request should carry.
+ * Implemented in `studio.ts` next to `openAIRequestSize` so the precedence
+ * rules can be unit-tested without importing this entry module.
+ */
+export { chatToolSize } from './studio.js'
 
 export function apply(ctx: Context, config: Config = {}): void {
   // DSH 0.1.7 resolves every `.volatile()` schema field into a stable box
@@ -542,10 +549,16 @@ export function apply(ctx: Context, config: Config = {}): void {
     // has no pixel grid at all, so a still-image size would only be rejected.
     // A relay's `aspect_ratio` maps through the same configured size table the
     // workbench uses, so the chat tools and the studio agree on one resolution.
-    const ratioSize = active.provider === 'openai-compat' && args.size === undefined && args.aspect_ratio !== undefined
-      ? openAIRequestSize(requestConfig, args.aspect_ratio, '1K')
-      : undefined
-    const size = svgRequested ? undefined : gifRequested && args.size === undefined ? undefined : args.size ?? ratioSize ?? active.imageSize
+    // The whole decision lives in `chatToolSize` so it can be unit-tested
+    // without standing up a Context.
+    const size = chatToolSize({
+      provider: active.provider,
+      config: requestConfig,
+      fallbackSize: active.imageSize,
+      args,
+      gifRequested,
+      svgRequested,
+    })
     // Ark output controls exist only on the Seedream profile; every other
     // provider in this branch ignores them.
     const arkOptions = active.provider === 'seedream' ? active.arkOptions : undefined
@@ -568,8 +581,12 @@ export function apply(ctx: Context, config: Config = {}): void {
     const extraBody = channelExtras !== undefined ? { ...channelExtras, ...outputFields } : Object.keys(outputFields).length === 0 ? undefined : outputFields
     const generated = await runCloud(signal => generateOpenAICompatibleImage({
       strictImageDownloads: current().strictImageDownloads === true,
-      // [FORK] 中转站可选 url 优先（取图失败自动回退 b64）
-      preferUrl: current().openaiCompatPreferUrl === true,
+      // [FORK] 中转站可选 url 优先（取图失败自动回退 b64）。
+      // 必须读 requestConfig 而不是 current()：渠道级 preferUrl 只会投影到
+      // requestConfig 上，读 current() 会让渠道设置完全失效——渠道开 true 但
+      // 全局 false 时不生效，反之渠道关 false 也会被全局 true 覆盖。
+      // 非 openai-compat provider 两个来源的值相同，因此不影响它们。
+      preferUrl: active.provider === 'openai-compat' && requestConfig.openaiCompatPreferUrl === true,
       provider: active.provider,
       apiKey: credential,
       baseURL: active.baseURL,

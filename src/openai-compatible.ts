@@ -4,7 +4,7 @@ import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { downloadPublicImage } from './public-image-download.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { debugTiming } from './debug-timing.js'
-import { redactSecrets } from './redact.js'
+import { redactSecrets, sanitizeUrlForLog } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
 import { arkOutputBody, type ArkOutputOptions } from './shared.js'
 
@@ -111,7 +111,7 @@ async function generateOpenAICompatibleImageOnce(
   responseFormat: 'url' | undefined,
 ): Promise<GeneratedCompatibleImage> {
   const started = performance.now()
-  debugTiming('gen.start', 0, `provider=${input.provider} model=${input.model} size=${input.size ?? '(none)'} response_format=${responseFormat ?? '(none)'} baseURL=${input.baseURL}`)
+  debugTiming('gen.start', 0, `provider=${input.provider} model=${input.model} size=${input.size ?? '(none)'} response_format=${responseFormat ?? '(none)'} baseURL=${sanitizeUrlForLog(input.baseURL)}`)
   const response = await guardedFetch(`${input.provider} image request`, input.signal, () => fetch(imageEndpoint(input.baseURL, 'generations'), {
     method: 'POST', redirect: 'error', signal: input.signal,
     headers: {
@@ -410,10 +410,10 @@ async function downloadImage(
   const started = performance.now()
   try {
     const result = await downloadImageInner(url, provider, input)
-    debugTiming('download.done', performance.now() - started, `provider=${provider} bytes=${result.data.byteLength} url=${String(url).slice(0, 80)}`)
+    debugTiming('download.done', performance.now() - started, `provider=${provider} bytes=${result.data.byteLength} url=${sanitizeUrlForLog(String(url))}`)
     return result
   } catch (error) {
-    debugTiming('download.fail', performance.now() - started, `provider=${provider} err=${String((error as { message?: unknown })?.message ?? error).slice(0, 160)} url=${String(url).slice(0, 80)}`)
+    debugTiming('download.fail', performance.now() - started, `provider=${provider} err=${String((error as { message?: unknown })?.message ?? error).slice(0, 160)} url=${sanitizeUrlForLog(String(url))}`)
     throw error
   }
 }
