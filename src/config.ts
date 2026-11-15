@@ -257,8 +257,12 @@ export const Config = z.object({
     editFormat: z.union([z.const('multipart'), z.const('jsonImageUrlArray'), z.const('formReferenceImages'), z.const('siliconflowJson')]).default('multipart'),
     editExtra: z.dict(z.any()).default({}),
     sizes: z.dict(z.dict(z.string())).default({}),
-    // [FORK] 渠道级 url 优先开关；schemastery 没有 optional()，用 default(false) 表达「未设置」
-    preferUrl: z.boolean().default(false),
+    // [FORK] 渠道级 url 优先开关，三态：true=开 / false=关 / 未设置=沿用全局。
+    // 这里**故意不写 .default()**：schemastery 的 default 会把缺失字段补成显式
+    // 值，`false` 一旦被补进去，shared.ts 里 `entry.preferUrl === undefined` 的
+    // 「沿用全局」分支就永远走不到，全局开关会被渠道默认值静默架空。
+    // 实测 z.boolean() 能原样保留 undefined，三态才成立。
+    preferUrl: z.boolean(),
   })).default([])),
   openaiCompatActiveChannel: volatile(z.string().default('')),
   openaiCompatEditModel: volatile(z.string().default('')),

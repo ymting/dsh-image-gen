@@ -116,6 +116,11 @@ export declare const DICT: {
         readonly qualityOptions: "可选生成质量（逗号分隔）";
         readonly generateExtra: "文生图附加字段（JSON）";
         readonly generateExtraHint: "仅文生图生效，合并到请求体末尾，可覆盖 size 和 quality。关闭商汤水印可填 {\"watermark\":false}。";
+        readonly preferUrl: "URL 优先取图";
+        readonly preferUrlInherit: "沿全局设置";
+        readonly preferUrlOn: "开启（推荐中转站）";
+        readonly preferUrlOff: "关闭（强制内联 base64）";
+        readonly preferUrlHint: "开启后请求带 response_format:\"url\"，服务端只回短链接，绕开中转站内联 1.5–3MB base64 被超时截断的问题；链接下载失败会自动重试一次改为内联。留「沿全局设置」则由本插件全局开关决定。";
         readonly editSizeMode: "JSON 图生图尺寸";
         readonly editSizeAuto: "自动（兼容商汤）";
         readonly editSizeSelected: "使用所选分辨率";
@@ -306,6 +311,11 @@ export declare const DICT: {
         readonly qualityOptions: "Available generation qualities (comma-separated)";
         readonly generateExtra: "Generation extra fields (JSON)";
         readonly generateExtraHint: "Generation only. Merged last; can override size and quality. Use {\"watermark\":false} for SenseNova.";
+        readonly preferUrl: "Prefer URL responses";
+        readonly preferUrlInherit: "Follow global setting";
+        readonly preferUrlOn: "On (recommended for relays)";
+        readonly preferUrlOff: "Off (force inline base64)";
+        readonly preferUrlHint: "Sends response_format:\"url\" so the relay returns a short link instead of inlining 1.5–3MB of base64, which slow links truncate into an \"invalid JSON\" error. A failed download retries once with inline base64. Leave on \"Follow global setting\" to inherit the plugin-wide switch.";
         readonly editSizeMode: "JSON edit dimensions";
         readonly editSizeAuto: "Auto (SenseNova compatible)";
         readonly editSizeSelected: "Use selected resolution";

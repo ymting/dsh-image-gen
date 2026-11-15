@@ -549,6 +549,12 @@ interface ProviderRowState {
   qualityOptionsText: string
   generateExtraText: string
   editSizeMode: 'auto' | 'selected'
+  /**
+   * [FORK] openai-compat only：该渠道是否优先让服务端回 URL。
+   * 三态而非布尔：'inherit' 表示沿用全局 openaiCompatPreferUrl，
+   * 落盘时不写这个字段，schema 才拿得到 undefined。
+   */
+  preferUrl: 'inherit' | 'on' | 'off'
   /** seedream only: Ark output controls. Other rows keep the defaults. */
   outputFormat: 'png' | 'jpeg'
   watermark: boolean
@@ -586,6 +592,7 @@ function emptyProviderRow(): ProviderRowState {
     qualityOptionsText: DEFAULT_COMPAT_QUALITIES.join(', '),
     generateExtraText: '',
     editSizeMode: 'auto',
+    preferUrl: 'inherit',
     outputFormat: 'jpeg',
     watermark: true,
     background: 'opaque',
@@ -670,6 +677,8 @@ function compatRowFields(channel: OpenAICompatChannel): Partial<ProviderRowState
     qualityOptionsText: (channel.qualityOptions !== undefined && channel.qualityOptions.length > 0 ? channel.qualityOptions : DEFAULT_COMPAT_QUALITIES).join(', '),
     generateExtraText: editExtraTextOf(channel.extraBody),
     editSizeMode: channel.editSizeMode === 'selected' ? 'selected' : 'auto',
+    // [FORK] undefined 表示沿用全局，别把它折叠成 'off'
+    preferUrl: channel.preferUrl === true ? 'on' : channel.preferUrl === false ? 'off' : 'inherit',
   }
 }
 
@@ -1010,6 +1019,10 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           editExtra: parseExtraFields(row.editExtraText, t('editExtraInvalid')),
           sizes: parseSizeTable(row.sizeTableText, t('sizeTableInvalid')),
         }
+        // [FORK] 只有显式打开/关闭才写 preferUrl；'inherit' 必须真正删掉这个键，
+        // 否则 undefined 变成了 false 或遗留在旧值里，全局开关就会被架空。
+        if (row.preferUrl === 'inherit') delete updated.preferUrl
+        else updated.preferUrl = row.preferUrl === 'on'
         const nextChannels = compatChannels.some(entry => entry.id === channel.id)
           ? compatChannels.map(entry => entry.id === channel.id ? updated : entry)
           : [...compatChannels, updated]
@@ -1575,6 +1588,24 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                 <span className="dsh-ig-label">{t('generateExtra')}</span>
                 <textarea className="dsh-ig-input dsh-ig-textarea" value={row.generateExtraText} onChange={event => { update({ generateExtraText: event.target.value }) }} placeholder={'{"watermark":false}'} rows={2} disabled={!settingsWritable} />
                 <span className="dsh-ig-hint">{t('generateExtraHint')}</span>
+              </label>
+              {/* [FORK] url 优先三态开关：中转站内联大 base64 超时时开它，响应缩到几百字节 */}
+              <label className="dsh-ig-field">
+                <span className="dsh-ig-label">{t('preferUrl')}</span>
+                <select
+                  className="dsh-ig-input"
+                  value={row.preferUrl}
+                  onChange={event => {
+                    const next = event.target.value
+                    update({ preferUrl: next === 'on' ? 'on' : next === 'off' ? 'off' : 'inherit' })
+                  }}
+                  disabled={!settingsWritable}
+                >
+                  <option value="inherit">{t('preferUrlInherit')}</option>
+                  <option value="on">{t('preferUrlOn')}</option>
+                  <option value="off">{t('preferUrlOff')}</option>
+                </select>
+                <span className="dsh-ig-hint">{t('preferUrlHint')}</span>
               </label>
             </>
           ) : null}
