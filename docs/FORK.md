@@ -1,7 +1,7 @@
 # 本 fork 与上游的差异
 
-基线：`dsh-image-gen@0.11.2`（上游 `shanliuling/dsh-image-gen`）
-本 fork：`ymting/dsh-image-gen`
+基线：`dsh-image-gen@0.11.3`（上游 `shanliuling/dsh-image-gen`）
+本 fork：`ymting/dsh-image-gen`，版本号 `0.11.3-fork.1`
 
 本 fork 的定位是「装完即用」：不改配置、不额外装东西，`npm/pnpm add` 完就能出图。
 为了让这一点成立，做了两类改动——**能力补全** 和 **分发方式**。
@@ -50,12 +50,16 @@
 - 显式写在 `extraBody.response_format` 里的值永远不会被覆盖；
 - `accept-encoding` 只声明 `gzip, deflate`，主动避开运行时不解码 zstd 的路径。
 
-### 3. `aspect_ratio` 方向修复
+### 3. `aspect_ratio` 方向修复（**已上游化，不再是 fork 差异**）
 
 | | |
 |---|---|
-| 源码 | `src/studio.ts` → `openAIRequestSize()`、`src/index.ts` 工具路径 |
-| 状态 | 已单独提交为 `fix/openai-compat-aspect-ratio-orientation`（与上游同风格） |
+| 源码 | `src/studio.ts` → `openAIRequestSize()` / `chatToolSize()`、`src/index.ts` 工具路径 |
+| 状态 | ✅ 已作为 PR #138 合入上游，**v0.11.3 起由上游维护**，本 fork 不再单独持有 |
+
+> **v0.11.3 合并说明**：本节内容已随 `v0.11.3` 进入上游主流，fork 侧的实现已
+> 与上游对齐（`chatToolSize` 取自上游版本，含「空档位取最低配置档」的语义）。
+> 保留本节是为了记录问题成因；改动这一块时要以上游代码为准，勿按本节旧描述改回。
 
 两处缺口：
 
@@ -162,11 +166,26 @@ aborted after body upload` 是时序 flaky（等待 50ms 后在断言 `serverAbo
 上游出新版时的流程：
 
 ```bash
-git fetch upstream
-git rebase upstream/main          # 本 fork 的 commit 只有几个，冲突面很小
-pnpm run build                    # 重新生成 lib/ 并提交
-git push
+git fetch upstream --tags
+git checkout -b merge/vX.Y.Z
+git merge vX.Y.Z --no-edit        # 合并而非 rebase：fork 已发布 tag，改写历史会断链
+# 解决冲突 → pnpm typecheck && pnpm test && pnpm build
+git tag vX.Y.Z-fork.1 && git push origin merge/vX.Y.Z --tags
 ```
 
-三项能力都做成了配置开关且默认关闭，因此即使上游合入其中某一项，也不会产生
-行为冲突——最坏情况是配置项重复，删掉本 fork 的对应实现即可。
+**2026-11-16 已按此流程合并 v0.11.3**（fork 版本 `0.11.3-fork.1`）。这次的实际冲突点：
+
+- `src/studio.ts`：与上游 `chatToolSize` 的注释段落冲突 —— 全部取上游版本（上游
+  的 `chatToolSize` 比 fork 原实现新，多了「空档位取该比例最低配置档」的语义）；
+- `src/index.ts`：import 行冲突 —— 取上游（不再从 studio 引 `openAIRequestSize`，
+  它已由 `chatToolSize` 内部消化）；
+- `tests/pr138-review-followup.spec.ts` 与上游新增的 `tests/chat-tool-size.spec.ts`
+  重复（同一批断言，上游是英文版）。删掉前者，其中 fork 独有的
+  `sanitizeUrlForLog` 用例迁移到 `tests/fork-url-redact.spec.ts`。
+
+合并后能力集：上游的 aspect 修复 + fork 的压缩解码 / URL 优先 / 计时日志 全部在位，
+`pnpm test` 1190 通过。
+
+三项能力中，第 3 项已被上游吸收；第 1、2 项仍是 fork 独有，且都做成配置开关且默认
+关闭，因此即使上游将来合入，也不会产生行为冲突——最坏情况是配置项重复，删掉本
+fork 的对应实现即可。
