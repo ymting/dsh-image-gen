@@ -27,7 +27,7 @@ export declare function openAICompatTable(config: Config): Array<{
  */
 export declare function openAIRequestSize(config: Config, ratio: string, quality: string): string;
 /**
- * [FORK] Decide the pixel size a chat-tool image request should carry.
+ * Decide the pixel size a chat-tool image request should carry.
  *
  * Lives here rather than in `index.ts` so the precedence rules can be tested
  * without importing the whole plugin entry (which pulls in every provider
@@ -41,9 +41,11 @@ export declare function openAIRequestSize(config: Config, ratio: string, quality
  *    resolving early would fail a request that used to reach the provider fine.
  * 2. **The budget is the table's own baseline, not `'1K'`.** A ratio configured
  *    with only a 2K tier would throw under a fixed 1K budget; an empty tier
- *    resolves to the largest configured tier at or below the default instead.
+ *    label is unparseable, so `openAIRequestSize` picks the ratio's lowest
+ *    configured tier instead, the cheapest size the relay lists for it.
  *
- * Precedence: explicit `size` → relay's configured table → profile default.
+ * Precedence: explicit `size` → relay's configured table → orientation
+ * fallback → profile default.
  */
 export declare function chatToolSize(input: {
     provider: string;
