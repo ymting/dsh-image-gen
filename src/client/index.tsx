@@ -115,6 +115,8 @@ interface ImageSettings {
   openaiCompatEditFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson'
   /** Extra JSON fields merged into the JSON edit body; ignored in multipart mode. */
   openaiCompatEditExtra?: Record<string, unknown>
+  /** [FORK] 中转站全局「取图方式」：让服务端回链接还是内联图片数据。渠道级 preferUrl 可覆盖。 */
+  openaiCompatPreferUrl?: boolean
   seedreamBaseURL?: string
   seedreamModel?: string
   /** Ark `output_format`; `png` is lossless and keeps an alpha channel. */
@@ -731,6 +733,8 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const [saveToWorkspace, setSaveToWorkspace] = useState(() => props.scope.getSnapshot().value?.saveToWorkspace ?? true)
   const [workspaceFolder, setWorkspaceFolder] = useState(() => props.scope.getSnapshot().value?.workspaceFolder ?? 'dsh-image-gen')
   const [showPill, setShowPill] = useState(() => props.scope.getSnapshot().value?.showProviderPill === true)
+  // [FORK] 全局取图方式，渠道里选「沿全局设置」时用这个值。
+  const [preferUrlGlobal, setPreferUrlGlobal] = useState(() => props.scope.getSnapshot().value?.openaiCompatPreferUrl === true)
   const [uiMessage, setUiMessage] = useState('')
   const [uiMessageIsError, setUiMessageIsError] = useState(false)
   const [workspaceMessage, setWorkspaceMessage] = useState('')
@@ -920,6 +924,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     setSaveToWorkspace(value?.saveToWorkspace ?? true)
     setWorkspaceFolder(value?.workspaceFolder ?? 'dsh-image-gen')
     setShowPill(value?.showProviderPill === true)
+    setPreferUrlGlobal(value?.openaiCompatPreferUrl === true)
     setRows(current => {
       const next = { ...current }
       for (const provider of IMAGE_PROVIDERS) {
@@ -1363,6 +1368,20 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     setUiMessage(''); setUiMessageIsError(false)
     void saveSetting('showProviderPill', next).catch((cause: unknown) => {
       setShowPill(snapshot.value?.showProviderPill === true)
+      setUiMessage(cause instanceof Error ? cause.message : String(cause))
+      setUiMessageIsError(true)
+    })
+  }
+
+  /**
+   * [FORK] 全局取图方式开关。渠道里选「沿全局设置」的渠道跟着它变；
+   * 渠道显式选开/关的不受影响（渠道级覆盖全局）。
+   */
+  const togglePreferUrlGlobal = (next: boolean): void => {
+    setPreferUrlGlobal(next)
+    setUiMessage(''); setUiMessageIsError(false)
+    void saveSetting('openaiCompatPreferUrl', next).catch((cause: unknown) => {
+      setPreferUrlGlobal(snapshot.value?.openaiCompatPreferUrl === true)
       setUiMessage(cause instanceof Error ? cause.message : String(cause))
       setUiMessageIsError(true)
     })
@@ -1862,6 +1881,16 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               renderProviderRow(provider),
               ...(provider === 'openai-compat' ? compatChannels.map(channel => renderCompatChannelRow(channel)) : []),
             ])}
+          </div>
+          <div className="dsh-ig-section">
+            <span className="dsh-ig-section-title">{t('preferUrlGlobalSection')}</span>
+            <div className="dsh-ig-field">
+              <label className="dsh-ig-check-row">
+                <input type="checkbox" checked={preferUrlGlobal} onChange={event => { togglePreferUrlGlobal(event.target.checked) }} disabled={!settingsWritable} />
+                <span className="dsh-ig-label">{t('preferUrlGlobal')}</span>
+              </label>
+              <span className="dsh-ig-hint">{t('preferUrlGlobalHint')}</span>
+            </div>
           </div>
           <div className="dsh-ig-section">
             <span className="dsh-ig-section-title">{t('workspaceSection')}</span>

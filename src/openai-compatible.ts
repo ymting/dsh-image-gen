@@ -89,7 +89,10 @@ export interface OpenAICompatibleGenerateInput {
 }
 
 export async function generateOpenAICompatibleImage(input: OpenAICompatibleGenerateInput): Promise<GeneratedCompatibleImage> {
-  if (input.preferUrl !== true) return generateOpenAICompatibleImageOnce(input, undefined)
+  // [FORK] 渠道自己指定了 response_format 时不做回退：重试时 extraBody 最后合并、
+  // 优先级更高，第二次请求跟第一次完全一样 —— 同样失败，还多扣一次费。
+  const explicitFormat = input.extraBody !== undefined && Object.prototype.hasOwnProperty.call(input.extraBody, 'response_format')
+  if (input.preferUrl !== true || explicitFormat) return generateOpenAICompatibleImageOnce(input, undefined)
   try {
     return await generateOpenAICompatibleImageOnce(input, 'url')
   } catch (error) {

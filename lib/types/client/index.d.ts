@@ -38,6 +38,8 @@ interface ImageSettings {
     openaiCompatEditFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson';
     /** Extra JSON fields merged into the JSON edit body; ignored in multipart mode. */
     openaiCompatEditExtra?: Record<string, unknown>;
+    /** [FORK] 中转站全局「取图方式」：让服务端回链接还是内联图片数据。渠道级 preferUrl 可覆盖。 */
+    openaiCompatPreferUrl?: boolean;
     seedreamBaseURL?: string;
     seedreamModel?: string;
     /** Ark `output_format`; `png` is lossless and keeps an alpha channel. */

@@ -152,6 +152,18 @@ describe('[FORK] preferUrl 与 b64 回退', () => {
     expect(bodies[0]).toContain('"response_format":"b64_json"')
   })
 
+  it('渠道自己指定了 response_format 时不做回退（回退请求会一模一样）', async () => {
+    // extraBody 最后合并、优先级更高：回退时即使内部去掉注入字段，第二次请求
+    // 仍带同样的 response_format，等于用同样参数再生成一次、再扣一次费。
+    const { bodies } = stubFetchSequence([
+      urlResponse(),
+      () => new Response('nope', { status: 502 }),
+      b64Response,
+    ])
+    await expect(generateOpenAICompatibleImage({ ...baseInput, preferUrl: true, extraBody: { response_format: 'url' } })).rejects.toThrow()
+    expect(bodies.length).toBe(1)
+  })
+
   it('请求被 4xx 拒绝时不回退（回退也没有意义）', async () => {
     const { bodies } = stubFetchSequence([
       () => new Response('{"error":{"message":"bad size"}}', { status: 400 }),
