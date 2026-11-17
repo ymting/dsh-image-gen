@@ -114,15 +114,38 @@ export declare function editOpenAICompatibleImage(input: {
     extraBody?: Readonly<Record<string, unknown>>;
 }): Promise<GeneratedCompatibleImage>;
 /**
- * [FORK] 中转站兼容：少数站点用 zstd/gzip/br/deflate 压缩响应体，而运行时
- * 未必按 `content-encoding` 自动解码，解出来就是乱码，JSON.parse 随即报
- * 「invalid JSON」——报错点和真实原因完全对不上。
+ * Decode a response body a relay sent compressed while the runtime did not
+ * decode it itself.
  *
- * 判定顺序：先看 zstd 魔数（`28 b5 2f fd`，有些站点压缩但漏写 header），
- * 再看声明的 content-encoding。解压失败说明声明与实际不符（例如运行时已经
- * 自动解过一遍），原样返回，让上层的 JSON 解析报出真正的原因，而不是在这里
- * 吞掉或抛错。
+ * Some OpenAI-compatible relays answer with `content-encoding: zstd` (or gzip /
+ * br / deflate) and the fetch implementation in use does not always honour it.
+ * The compressed bytes then reach `JSON.parse` and surface as
+ * `openai-compat image request returned invalid JSON` — a message that points
+ * at the prompt or the site rather than at the transport, so the failure is
+ * routinely misdiagnosed.
  *
- * 导出供测试直接验证各分支；运行时只经 readBoundedBytes 调用。
+ * Two details matter beyond the single-coding case:
+ *
+ * - A header may list several codings (`gzip, zstd`). HTTP applies them in the
+ *   order listed, so decoding runs in reverse — decoding only the last one
+ *   would hand gzip bytes to the parser and still report invalid JSON.
+ * - The zstd magic (`28 b5 2f fd`) is also checked on its own, because a few
+ *   relays compress without declaring the header, and because a header that
+ *   disagrees with the body (the runtime already decoded it) must not stop a
+ *   body that is plainly zstd from being decoded.
+ *
+ * A decompression error means the declaration disagrees with the bytes
+ * (typically the runtime already decoded them, or the body was never
+ * compressed), so the input is returned unchanged and the caller's own parser
+ * reports the real problem. Returning the bytes untouched is deliberate:
+ * swallowing the original error here would hide the actual cause.
+ *
+ * `maxOutputLength` is passed to every decompression call so a small body that
+ * expands to hundreds of MiB is rejected *before* the buffer is allocated, and
+ * `maxBytes` is checked again afterwards. An output-limit failure is a real
+ * error and is propagated; it must not be mistaken for an encoding mismatch.
+ *
+ * Exported so the tests can drive each branch directly; at runtime it is only
+ * reached through `readBoundedBytes`.
  */
-export declare function decodeCompressedBody(bytes: Uint8Array, encoding: string | null): Uint8Array;
+export declare function decodeCompressedBody(bytes: Uint8Array, encoding: string | null, maxBytes?: number): Uint8Array;
